@@ -1,0 +1,2 @@
+[workspace]
+members = [ "mt-server","st-server"]
