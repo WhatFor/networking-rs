@@ -16,18 +16,15 @@ fn main() {
                 Ok(stream) => {
                     handle_connection(stream);
                 }
-                Err(e) => { /* connection failed */ }
+                Err(_) => { /* connection failed */ }
             } 
         } 
     },
     Err(err) => {
         println!("Failed to bind to {}. See: {}", addr, err);
-        return;
     },
    }
 }
-
-const OK: &str = "HTTP/1.1 200 OK\r\n\r\n";
 
 fn handle_connection(mut stream: TcpStream) {
     println!("Connection established with {}", stream.peer_addr().unwrap());
@@ -67,6 +64,9 @@ fn handle_connection(mut stream: TcpStream) {
         "/" => {
             ("{\"status\": \"ok\"}", "200 OK")
         },
+        "/index.html" => {
+            ("<html><p>hi</p></html>", "200 OK")
+        },
         _ => {
             ("", "404 NOT FOUND")
         },
@@ -81,7 +81,6 @@ fn handle_connection(mut stream: TcpStream) {
         },
         Err(err) => {
             println!("Failed to write to stream. See: {}", err);
-            return;
         },
     }
 }

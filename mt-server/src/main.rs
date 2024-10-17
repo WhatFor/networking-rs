@@ -1,42 +1,78 @@
-use std::{io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}, thread, time::Duration};
+use std::{io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}, sync::{mpsc::{self, SendError}, Arc, Mutex}, thread, time::Duration};
 
 const PORT: &str = "6969";
 const LOCALHOST: &str = "127.0.0.1";
 
 struct ThreadWorker {
     id: usize,
-    thread: thread::JoinHandle<()>
+    thread: Option<thread::JoinHandle<()>>
 }
 
 impl ThreadWorker {
-    pub fn new(id: usize) -> Self {
-        let thread = thread::spawn(|| {});
+    pub fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
+        let thread = Some(thread::spawn(move || loop {
+            let job = receiver.lock().unwrap().recv();
+
+            match job {
+                Ok(job) => {
+                    println!("Got job on thread {id}");
+                    job();
+                },
+                Err(_) => {
+                    println!("Thread {id} closing...");
+                    break;
+                },
+            }
+        }));
 
         ThreadWorker { id, thread }
     }
 }
 
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
 struct ThreadPool {
-    workers: Vec<ThreadWorker>
+    workers: Vec<ThreadWorker>,
+    sender: Option<mpsc::Sender<Job>>
 }
 
 impl ThreadPool {
     pub fn new(worker_count: usize) -> Self {
             let mut workers = Vec::with_capacity(worker_count);
+            let (sender, receiver) = mpsc::channel();
+            let receiver = Arc::new(Mutex::new(receiver));
 
             for i in 0..worker_count {
-                workers.push(ThreadWorker::new(i));
+                workers.push(ThreadWorker::new(i, Arc::clone(&receiver)));
             }
 
         ThreadPool {
-            workers
+            workers,
+            sender: Some(sender),
         }
     }
 
-    pub fn execute<F>(&self, f: F)
+    pub fn execute<F>(&self, f: F) -> Result<(), SendError<Job>>
     where
         F: FnOnce() + Send + 'static {
-         
+         let job = Box::new(f);
+
+         self.sender.as_ref().unwrap().send(job)
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+
+        drop(self.sender.take());
+
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}...", worker.id);
+
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap();
+            }
+        }
     }
 }
 
@@ -53,22 +89,25 @@ fn main() {
             match stream {
                 Ok(stream) => {
 
-                    pool.execute(|| {
+                    let execute =  pool.execute(|| {
                         handle_connection(stream);
                     });
+
+                    if let Err(e) = execute {
+                        println!("Failed to handle connection. See: {}", e);
+                    }
                 }
-                Err(e) => { /* connection failed */ }
+                Err(e) => { 
+                    println!("Connection failed: {e}");
+                 }
             } 
         } 
     },
     Err(err) => {
         println!("Failed to bind to {}. See: {}", addr, err);
-        return;
     },
    }
 }
-
-const OK: &str = "HTTP/1.1 200 OK\r\n\r\n";
 
 fn handle_connection(mut stream: TcpStream) {
     println!("Connection established with {}", stream.peer_addr().unwrap());
@@ -126,7 +165,6 @@ fn handle_connection(mut stream: TcpStream) {
         },
         Err(err) => {
             println!("Failed to write to stream. See: {}", err);
-            return;
         },
     }
 }
